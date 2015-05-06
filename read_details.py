@@ -2,97 +2,35 @@ __author__ = 'richard'
 
 from bs4 import BeautifulSoup as bs
 import requests
+import sqlite3
 
 import pickle
 
 import sqlalchemy
 
-creds = {"userid":"richardagreen@gmail.com","password":"piersermisse","login":"Login"}
+from creds import creds
 
-login_page = "https://www.aupair-world.net/login"
+from aupair_world import login_page, message_page, negative_messages, aupair_detail_page
 
-base_page = "https://www.aupair-world.net/aupair_detail?a="
 import pprint
-#message_page = "https://www.aupair-world.net/my_aupair_world/messages"
-message_page = "https://www.aupair-world.net/my_aupair_world/messages?&voption[count_option]=100&page=1&box=1"
-message_detail = "https://www.aupair-world.net/my_aupair_world/messages/msg?id="
-
-negative_messages = "https://www.aupair-world.net/my_aupair_world/messages?&voption[count_option]=100&page=1&box=3"
-negative_messages = "https://www.aupair-world.net/my_aupair_world/messages?&voption[count_option]=5&page=1&box=3"
-
-
 
 
 from sklearn.feature_extraction.text import HashingVectorizer
 
-class AuPair(object):
-    @classmethod
-    def populate_from_id(cls,session,id):
-        pass
+from sqlalchemy.ext.declarative import declarative_base
+Base = declarative_base()
 
-    @classmethod
-    def populate_from_html(cls,html_text):
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine
 
-        soup = bs(html_text)
-
-        metadata = {"Name":"name","Nationality":"nationality","Previous au pair experience":"previous_experience"}
-        class_search = {"aupair_age":"age","gender":"sex"}
-
-        profile_tab = soup.find(id="profileTab")
-        letters_tab = soup.find(id="lettersTab")
-
-        a = AuPair()
-
-        for m in metadata:
-            th = profile_tab.find('th',text=m)
-            if th:
-                td =  th.findNext('td')
-                print "%s -> %s" %(m,td.text)
-            else:
-                print "%s -> :-(" %(m)
-
-
-        for cs in class_search:
-            val = profile_tab.find(class_ = cs).text
-            print "%s -> %s" %(class_search[cs],val )
-
-
-
-        all_text = ""
-
-        comments = ["Dear Family","About me","Why do you want to be an au pair? "]
-
-        for c in comments:
-            th = letters_tab.find('h3',text=c)
-            if th:
-                td =  th.findNext('p')
-                print "%s -> %s" %(c,td.text)
-                all_text = all_text + td.text
-            else:
-                print "%s -> :-(" %(c)
-
-
-        return a
-
-
-    def __init__(self):
-        pass
-
-
-class Message(object):
-    def __init__(self,**kwargs):
-        self.sender_id = None
-        self.text = None
-        for k in kwargs:
-            setattr(self,k,kwargs[k])
-
-    def __repr__(self):
-        print "<Message %s - %s>" % (self.sender_id, str(self.text.replace("\r","\n")))
-
+from schema import AuPair, Message, engine, dbsession
 
 
 def read_negative_messages(s):
-    r = s.get(negative_messages)
+    return read_messages_from_url(s,negative_messages)
+
+def read_messages_from_url(s,url):
+    r = s.get(url)
     soup = bs(r.text)
 
     message_table = soup.find(id="messageList")
@@ -100,63 +38,36 @@ def read_negative_messages(s):
     ret = []
     messages = message_table.find_all(class_="text")
     for me in messages:
-        ret.append(int(me.a.attrs["name"]))
-
-    pprint.pprint(get_messages_from_id(s,ret))
-
-
-
-def get_messages_from_id(s,id_list):
-    ret = []
-    for m in id_list:
-        r = s.get(message_detail+str(m))
-        #print r.text
-        soup = bs(r.text)
-        message = soup.find(id="msSingle")
-
-        thread = message.find(id="thread")
-        sender = thread.a.text
-        sender_id = thread.a.attrs["href"].split("=")[1]
-        email = thread.find(class_="msCustom panel radius typewriter").text
-
-
-        print m,"-->", sender_id, "(" , sender, ")"
-    #    print "-----------------------------------------------------------"
-    #    print email.replace("\r","\n")
-    #    print "-----------------------------------------------------------"
-
-        mes = Message(sender_id=sender_id,text=email)
-
-        ret.append(mes)
-
+        id = int(me.a.attrs["name"])
+        print "message id", id
+        if dbsession.query(Message).filter(Message.id==id).count() == 0:
+            try:
+                m = Message.populate_message_from_id(s,id)
+                ret.append(m)
+                dbsession.add(m)
+                dbsession.commit()
+            except AttributeError:
+                pass
+        else:
+            m = dbsession.query(Message).filter(Message.id==id).first()
+            ret.append(m)
+            print "already in database"
 
     return ret
 
 
 def read_messages(s):
-    r = s.get(message_page)
-    soup = bs(r.text)
-
-    message_table = soup.find(id="messageList")
-
-    ret = []
-    messages = message_table.find_all(class_="text")
-    for me in messages:
-        ret.append(int(me.a.attrs["name"]))
-
-    get_messages_from_id(s,ret)
-
+    return read_messages_from_url(s,message_page)
 
 
 
 def read_html(s,id):
 
-
     from_web = False
 
     if from_web:
         pf = open("exampleaupair.pf","wb")
-        r = s.get(base_page+str(id))
+        r = s.get(aupair_detail_page+str(id))
         pickle.dump(r,pf)
         pf.close()
     else:
@@ -167,7 +78,15 @@ def read_html(s,id):
 
     a = AuPair.populate_from_html(r.text)
 
-    print a
+  #  print a
+   # print a.features()
+
+    return a
+
+#    with requests.Session() as s:
+#        s.post(login_page, data=creds)
+#        a2 = AuPair.populate_from_id(s,2511347)
+#        print a2
 
   #  v = HashingVectorizer([all_text])
 
@@ -184,24 +103,72 @@ def get_categories():
     return ["yes","no"]
 
 
-
-
+def read_mail():
+    with requests.Session() as s:
+        s.post(login_page, data=creds)
+        r = s.get('https://www.aupair-world.net/my_aupair_world/messages')
+        print read_negative_messages(s)
 
 if __name__ == "__main__":
 
+    engine = create_engine('sqlite:///aupairs.db',echo=True)
+    Session = sessionmaker()
+    Session.configure(bind=engine)
+    dbsession = Session()
+
+    Base.metadata.create_all(engine)
 
     with requests.Session() as s:
         s.post(login_page, data=creds)
-        # print the html returned or something more intelligent to see if it's a successful login page.
-  #      print s
 
-        # An authorised request.
-        r = s.get('https://www.aupair-world.net/my_aupair_world/messages')
-#        print r.text
-#        print "------"
-            # etc...
 
-        #
-        #print read_messages(s)
-        print read_negative_messages(s)
-        #print read_html(s,2525313)
+        a = AuPair.populate_from_id(s,2470232)
+        print a
+
+        pos_messages = read_messages(s)
+        neg_messages = read_negative_messages(s)
+
+
+        good_texts = []
+        bad_texts = []
+
+        for p in pos_messages:
+            if not dbsession.query(AuPair).filter(AuPair.id == p.sender_id).count():
+                a = AuPair.populate_from_id(s,p.sender_id)
+                a.category="active"
+                print "**** Adding"
+                try:
+                    print a
+                except UnicodeEncodeError:
+                    pass
+                dbsession.add(a)
+                dbsession.commit()
+
+            good_texts.append(a.features())
+
+        for p in neg_messages:
+            if not dbsession.query(AuPair).filter(AuPair.id == p.sender_id).count():
+                a = AuPair.populate_from_id(s,p.sender_id)
+                if a.category == None:
+                    a.category = "reject"
+                if "inactive" in a.category:
+                    a.name = p.sender
+                else:
+                    a.category = "reject"
+                try:
+                    print "**** Adding"
+                    print a
+                except UnicodeEncodeError:
+                    print "decode error"
+                dbsession.add(a)
+                dbsession.commit()
+                bad_texts.append(a.features())
+
+
+
+
+        print bad_texts
+
+
+
+
